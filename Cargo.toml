@@ -1,33 +1,40 @@
 [package]
 name = "profiler-get-symbols"
+description = "A local symbolication library for Firefox Profiler"
 version = "0.1.0"
-authors = ["Markus Stange <mstange@themasta.com>"]
+authors = ["Markus Stange <mstange@themasta.com>", "Christina Cheung <ccheung256@gmail.com>"]
 license = "MIT/Apache-2.0"
+edition = "2018"
 
 [dependencies]
 pdb = "0.3.0"
 scroll = "0.9.2"
 uuid = "0.7.2"
 js-sys = "0.3.24"
-wasm-bindgen = {version = "0.2.48", features = ["serde-serialize"] }
+# 0.2.49 requires 0.3.0-alpha.18, which is not stable yet
+wasm-bindgen = { version = "=0.2.48", features = ["serde-serialize"] }
+wasm-bindgen-futures = { version = "=0.3.25", features = ["futures_0_3"]}
+futures-util-preview = { version = "=0.3.0-alpha.15", optional = true }
+futures-channel-preview = { version = "=0.3.0-alpha.15", optional = true }
+wasm-bindgen-test = "=0.2.48"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "^1.0.59"
-
-
-[dependencies.object]
-version = "0.10.0"
-default-features = false
-features = ["std"]
+serde_json = "1.0"
+json = "*"
+addr2line = "0.8.0"
+fallible-iterator = "0.1.0"
+gimli = "=0.16.1"
+object = { version = "0.11.0", default-features = false }
 
 [dependencies.goblin]
 # The version and features of goblin need to match what's in object's Cargo.toml,
 # because we really want object's goblin and not another instance of goblin.
-version = "0.0.17"
+version = "=0.0.19"
 features = ["endian_fd", "elf32", "elf64", "mach32", "mach64", "pe32", "pe64", "archive"]
 default-features = false
 
-[lib]
-crate-type = ["cdylib"]
+#[lib]
+# crate-type = ["cdylib"]
 
-[profile.release]
-lto = true
+# [profile.release]
+# lto = true

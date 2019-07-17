@@ -1,3 +1,6 @@
+#![feature(async_await)]
+#[macro_use]
+extern crate serde_json;
 extern crate goblin;
 extern crate js_sys;
 extern crate object;
@@ -7,19 +10,36 @@ extern crate serde;
 extern crate serde_derive;
 extern crate uuid;
 extern crate wasm_bindgen;
+extern crate wasm_bindgen_futures;
+#[macro_use]
+extern crate wasm_bindgen_test;
 
-mod compact_symbol_table;
-mod elf;
-mod error;
-mod macho;
-mod pdb;
-
-use wasm_bindgen::prelude::*;
-
-use crate::error::{GetSymbolsError, GetSymbolsErrorJson, Result};
+pub mod symbol_table;
+pub mod symbolicate_common;
+pub mod v5;
+pub mod v6;
 use goblin::{mach, Hint};
+use js_sys::Promise;
+use serde_json::Value as JsonValue;
 use std::io::Cursor;
 use std::mem;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+#[macro_use]
+use wasm_bindgen_futures::futures_0_3::*;
+
+#[wasm_bindgen]
+extern "C" {
+    pub type BuffersWrapper;
+    #[wasm_bindgen(structural, method)]
+    fn getInnerDebugData(this: &BuffersWrapper) -> WasmMemBuffer;
+    #[wasm_bindgen(structural, method)]
+    fn getInnerBinaryData(this: &BuffersWrapper) -> WasmMemBuffer;
+    #[wasm_bindgen(js_namespace = console, js_name = log)]
+    fn log(s: String);
+    #[wasm_bindgen(js_namespace = console, js_name = log)]
+    fn log_str(s: &str);
+}
 
 #[wasm_bindgen]
 pub struct CompactSymbolTable {
@@ -91,49 +111,51 @@ impl WasmMemBuffer {
     }
 }
 
-fn get_compact_symbol_table_impl(
-    binary_data: &[u8],
-    debug_data: &[u8],
-    breakpad_id: &str,
-) -> Result<compact_symbol_table::CompactSymbolTable> {
-    let mut reader = Cursor::new(binary_data);
-    match goblin::peek(&mut reader)? {
-        Hint::Elf(_) => elf::get_compact_symbol_table(binary_data, breakpad_id),
-        Hint::Mach(_) => macho::get_compact_symbol_table(binary_data, breakpad_id),
-        Hint::MachFat(_) => {
-            let mut errors = vec![];
-            let multi_arch = mach::MultiArch::new(binary_data)?;
-            for fat_arch in multi_arch.iter_arches().filter_map(std::result::Result::ok) {
-                let arch_slice = fat_arch.slice(binary_data);
-                match macho::get_compact_symbol_table(arch_slice, breakpad_id) {
-                    Ok(table) => return Ok(table),
-                    Err(err) => errors.push(err),
-                }
-            }
-            Err(GetSymbolsError::NoMatchMultiArch(errors))
-        }
-        Hint::PE => pdb::get_compact_symbol_table(debug_data, breakpad_id),
-        _ => Err(GetSymbolsError::InvalidInputError(
-            "goblin::peek fails to read",
-        )),
-    }
+#[wasm_bindgen]
+pub fn get_inline_frames(
+    file_path: String,
+    read_buffer_callback: js_sys::Function,
+    list_of_addresses: Vec<u32>,
+    breakpad_id: String,
+) -> Promise {
+    future_to_promise(crate::v6::get_all_stack_frames_impl(
+        //  get_all_stack_frames_impl
+        file_path,
+        read_buffer_callback,
+        list_of_addresses,
+        breakpad_id,
+    ))
 }
-
 #[wasm_bindgen]
 pub fn get_compact_symbol_table(
     binary_data: &WasmMemBuffer,
     debug_data: &WasmMemBuffer,
     breakpad_id: &str,
 ) -> std::result::Result<CompactSymbolTable, JsValue> {
-    match get_compact_symbol_table_impl(&binary_data.buffer, &debug_data.buffer, breakpad_id) {
-        Result::Ok(table) => Ok(CompactSymbolTable {
-            addr: table.addr,
-            index: table.index,
-            buffer: table.buffer,
-        }),
-        Result::Err(err) => {
-            let result = GetSymbolsErrorJson::from_error(err);
-            Err(JsValue::from_serde(&result).unwrap())
+    symbol_table::get_compact_symbol_table(binary_data, debug_data, breakpad_id)
+}
+
+#[wasm_bindgen]
+pub fn get_symbolicate_response(
+    symbolicate_request: JsValue,
+    read_buffer_callback: js_sys::Function, // read_buffer_callback takes two param: candidatePath, debugPath
+    candidate_paths: JsValue,
+    url: String,
+) -> Promise {
+    return match url.as_ref() {
+        "symbolicate/v5" => {
+            v5::get_symbolicate_response(symbolicate_request, read_buffer_callback, candidate_paths)
         }
-    }
+        "symbolicate/v6" => {
+            v6::get_symbolicate_response(symbolicate_request, read_buffer_callback, candidate_paths)
+        }
+        invalid_url => {
+            log(format!("Invalid URL called in rust : {}", invalid_url));
+            use crate::symbolicate_common::error::{SymbolicateError, SymbolicateErrorJson};
+            let error_type = SymbolicateErrorJson::from_error(SymbolicateError::InvalidInputError(
+                String::from("Invalid URL"),
+            ));
+            Promise::reject(&JsValue::from_serde(&error_type).unwrap())
+        }
+    };
 }

@@ -1,5 +1,5 @@
-use crate::error::{GetSymbolsError, Result};
-use compact_symbol_table::CompactSymbolTable;
+pub use crate::symbol_table::compact_symbol_table::*;
+pub use crate::symbol_table::error::{GetSymbolsError, Result};
 use goblin::elf;
 use object::{ElfFile, Object, Uuid};
 use std::cmp;
@@ -11,7 +11,7 @@ pub fn get_compact_symbol_table(buffer: &[u8], breakpad_id: &str) -> Result<Comp
         .map_err(|_| GetSymbolsError::InvalidInputError("Could not parse ELF header"))?;
     let elf_id = get_elf_id(&elf_file, buffer)
         .ok_or_else(|| GetSymbolsError::InvalidInputError("id cannot be read"))?;
-    let elf_id_string = format!("{:X}0", elf_id.simple());
+    let elf_id_string = format!("{:X}0", elf_id.to_simple());
     if elf_id_string != breakpad_id {
         return Err(GetSymbolsError::UnmatchedBreakpadId(
             elf_id_string,
@@ -36,7 +36,7 @@ fn create_elf_id(identifier: &[u8], little_endian: bool) -> Option<Uuid> {
         data[6..8].reverse(); // uuid field 3
     }
 
-    Uuid::from_bytes(&data).ok()
+    Some(Uuid::from_bytes(data))
 }
 
 /// Tries to obtain the object identifier of an ELF object.

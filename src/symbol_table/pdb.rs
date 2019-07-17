@@ -1,5 +1,5 @@
-use crate::error::{GetSymbolsError, Result};
-use compact_symbol_table::CompactSymbolTable;
+use crate::symbol_table::compact_symbol_table::CompactSymbolTable;
+use crate::symbol_table::error::{GetSymbolsError, Result};
 use pdb_crate::{FallibleIterator, ProcedureSymbol, PublicSymbol, SymbolData, PDB};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -31,7 +31,10 @@ pub fn get_compact_symbol_table(pdb_data: &[u8], breakpad_id: &str) -> Result<Co
                 function: true,
                 offset,
                 ..
-            })) => Some((offset.to_rva(&addr_map)?.0, symbol.name().ok()?.to_string())),
+            })) => Some((
+                offset.to_rva(&addr_map)?.0 as u32,
+                symbol.name().ok()?.to_string(),
+            )),
             _ => None,
         })
         .collect()?;
@@ -58,7 +61,7 @@ pub fn get_compact_symbol_table(pdb_data: &[u8], breakpad_id: &str) -> Result<Co
                         })?
                         .0;
                     hashmap
-                        .entry(query)
+                        .entry(query.into())
                         .or_insert_with(|| Cow::from(name.to_string().into_owned()));
                 }
             }

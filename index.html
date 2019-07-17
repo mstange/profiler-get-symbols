@@ -18,7 +18,7 @@
 const { CompactSymbolTable, WasmMemBuffer, get_compact_symbol_table } = wasm_bindgen;
 
 const request = new Request('./profiler_get_symbols_bg.wasm', {
-  integrity: 'sha384-VRFfKl0kmBkz26beICb5cnae04MM1VstaiakQGc+sTdM1C5scyoEI6p0invqfttp'
+  // integrity: 'sha384-Be8HpV3ZILuaRRaIUATA+L3btsLWEE+ocnKh5UAZ1/Odvs5xF3u5BheCz5fMhOAw'
 });
 
 WebAssembly.compileStreaming(fetch(request)).then(module => {
@@ -70,9 +70,7 @@ async function doStuff() {
 
     const [addr, index, buffer] = [output.take_addr(), output.take_index(), output.take_buffer()];
     output.free();
-    console.log([addr, index, buffer]);
     console.log(`Received symbol table with ${addr.length} symbols:`);
-    console.log(symbolTableToSymbolMapObj([addr, index, buffer]));
   } catch (e) {
     console.error("Caught exception:", e);
   }
@@ -90,6 +88,81 @@ function symbolTableToSymbolMapObj([addr, index, buffer]) {
     mapObj[`0x${addr[i].toString(16)}`] = textDecoder.decode(buffer.subarray(index[i], index[i + 1]));
   }
   return mapObj;
+}
+
+function printFromRust(phrase) {
+  console.log(phrase);
+}
+
+function readFileInto(file, dataBuf) {
+  // Ideally we'd be able to call file.readTo(dataBuf) here, but readTo no
+  // longer exists.
+  // So instead, we copy the file over into wasm memory in 4MB chunks. This
+  // will take 425 invocations for a a 1.7GB file (such as libxul.so for a
+  // Firefox for Android build) and not take up too much memory per call.
+  const dataBufLen = dataBuf.byteLength;
+  const chunkSize = 4 * 1024 * 1024;
+  let pos = 0;
+  while (pos < dataBufLen) {
+    const chunkData = file.read({ bytes: chunkSize });
+    const chunkBytes = chunkData.byteLength;
+    if (chunkBytes === 0) {
+      break;
+    }
+
+    dataBuf.set(chunkData, pos);
+    pos += chunkBytes;
+  }
+} 
+
+// helper callback function for symbolicate testing, currently not implemented
+// in index.html to test the function. 
+async function passBuffer(candidatePath, debugPath) {
+  console.log(`passBuffer is called: I got ${candidatePath} and ${debugPath} from Rust`);
+  const binaryFileResult = await getFileResultOrUndefined(document.querySelector("#binary"));
+  const debugFileResult = await getFileResultOrUndefined(document.querySelector("#debug"));
+  if (!binaryFileResult) {
+    console.log(`binaryFileResult is empty`);
+    return;
+  }
+  const binaryData = new WasmMemBuffer(binaryFileResult.byteLength, array => {
+    array.set(new Uint8Array(binaryFileResult));
+  });
+  let debugData = binaryData;
+  if (debugFileResult) {
+    debugData = new WasmMemBuffer(debugFileResult.byteLength, array => {
+      array.set(new Uint8Array(debugFileResult));
+    });
+  }
+
+  const breakpadId = document.querySelector("#breakpadId").value;
+  return new BuffersWrapper(
+    binaryData, 
+    debugData,
+    breakpadId
+  );
+  }
+
+// helper callback function for symbolicate testing, currently not implemented
+// in index.html to test the function. 
+class BuffersWrapper {
+  constructor (binaryData, debugData, debugId) {
+    this.binaryData = binaryData;
+    this.debugData = debugData;
+    this.debugId = debugId;
+  }
+
+  getInnerDebugData() {
+    return this.debugData;
+  }
+
+  getInnerBinaryData() {
+    return this.binaryData;
+  }
+
+  getInnerDebugID() {
+    return this.debugId;
+  }
 }
 
 </script>
