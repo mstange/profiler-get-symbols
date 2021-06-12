@@ -21,7 +21,8 @@ version = "0.15.2"
 [dependencies.object]
 default-features = false
 features = ["std", "read_core", "archive", "elf", "macho", "pe", "unaligned"]
-version = "0.25.0"
+# version = "0.25.0"
+path = "../../object"
 
 [dependencies]
 pdb = "0.7.0"
@@ -35,3 +36,4 @@ msvc-demangler = "0.9.0"
 range-collections = "0.1.1"
 rustc-demangle = "0.1.16"
 bitflags = "1.2.1"
+bytesize = "1.0.1"

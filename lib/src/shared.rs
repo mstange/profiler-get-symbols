@@ -1,8 +1,14 @@
 use object::read::ReadRef;
+
+#[cfg(feature = "stats")]
+use range_collections::RangeSet;
+
+#[cfg(feature = "stats")]
+use std::{borrow::Borrow, cell::RefCell};
+
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::{collections::BTreeMap, fmt::Debug};
 use std::{marker::PhantomData, ops::Deref};
 
@@ -229,12 +235,70 @@ where
         .collect()
 }
 
+#[cfg(feature = "stats")]
+struct FileReadStats {
+    bytes_read: u64,
+    unique_bytes_read: RangeSet<u64>,
+    read_call_count: u64,
+}
+
+#[cfg(feature = "stats")]
+impl FileReadStats {
+    pub fn new() -> Self {
+        FileReadStats {
+            bytes_read: 0,
+            unique_bytes_read: RangeSet::empty(),
+            read_call_count: 0,
+        }
+    }
+
+    pub fn record_read(&mut self, offset: u64, size: u64) {
+        self.bytes_read += size;
+        self.unique_bytes_read |= RangeSet::from(offset..(offset + size));
+        self.read_call_count += 1;
+        // std::thread::sleep(std::time::Duration::from_micros(size / 8));
+    }
+
+    pub fn bytes_read(&self) -> u64 {
+        self.bytes_read
+    }
+
+    pub fn unique_bytes_read(&self) -> u64 {
+        self.unique_bytes_read
+            .borrow()
+            .iter()
+            .map(|r| match r {
+                (std::ops::Bound::Included(start), std::ops::Bound::Excluded(end)) => end - start,
+                _ => panic!("Unexpected range {:?}", r),
+            })
+            .sum()
+    }
+}
+
+#[cfg(feature = "stats")]
+impl std::fmt::Display for FileReadStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let bytes_read = self.bytes_read();
+        let unique_bytes_read = self.unique_bytes_read();
+        let repeated_bytes_read = bytes_read - unique_bytes_read;
+        let redundancy_percent = repeated_bytes_read * 100 / bytes_read;
+        write!(
+            f,
+            "Read {} unique, {}% redundancy. {} reads total",
+            bytesize::ByteSize(unique_bytes_read),
+            redundancy_percent,
+            self.read_call_count
+        )
+    }
+}
+
 /// A wrapper for a FileContents object. The wrapper provides some convenience methods
 /// and, most importantly, implements `ReadRef` for `&FileContentsWrapper`.
 pub struct FileContentsWrapper<T: FileContents> {
     file_contents: T,
     len: u64,
-    bytes_read: AtomicU64,
+    #[cfg(feature = "stats")]
+    stats: RefCell<FileReadStats>,
 }
 
 impl<T: FileContents> FileContentsWrapper<T> {
@@ -243,7 +307,8 @@ impl<T: FileContents> FileContentsWrapper<T> {
         Self {
             file_contents,
             len,
-            bytes_read: AtomicU64::new(0),
+            #[cfg(feature = "stats")]
+            stats: RefCell::new(FileReadStats::new()),
         }
     }
 
@@ -254,7 +319,9 @@ impl<T: FileContents> FileContentsWrapper<T> {
 
     #[inline]
     pub fn read_bytes_at(&self, offset: u64, size: u64) -> FileAndPathHelperResult<&[u8]> {
-        self.bytes_read.fetch_add(size, Ordering::Relaxed);
+        #[cfg(feature = "stats")]
+        self.stats.borrow_mut().record_read(offset, size);
+
         self.file_contents.read_bytes_at(offset, size)
     }
 
@@ -265,17 +332,17 @@ impl<T: FileContents> FileContentsWrapper<T> {
         delimiter: u8,
     ) -> FileAndPathHelperResult<&[u8]> {
         let bytes = self.file_contents.read_bytes_at_until(offset, delimiter)?;
-        self.bytes_read
-            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+
+        #[cfg(feature = "stats")]
+        self.stats
+            .borrow_mut()
+            .record_read(offset, bytes.len() as u64);
+
         Ok(bytes)
     }
 
     pub fn read_entire_data(&self) -> FileAndPathHelperResult<&[u8]> {
         self.read_bytes_at(0, self.len())
-    }
-
-    pub fn bytes_read(&self) -> u64 {
-        self.bytes_read.load(Ordering::Relaxed)
     }
 
     pub fn full_range(&self) -> RangeReadRef<'_, &Self> {
@@ -287,11 +354,12 @@ impl<T: FileContents> FileContentsWrapper<T> {
     }
 }
 
-// impl<T: FileContents> Drop for FileContentsWrapper<T> {
-//     fn drop(&mut self)  {
-//         eprintln!("Read {} of {} bytes.", self.bytes_read(), self.len());
-//     }
-// }
+#[cfg(feature = "stats")]
+impl<T: FileContents> Drop for FileContentsWrapper<T> {
+    fn drop(&mut self) {
+        eprintln!("{}", self.stats.borrow());
+    }
+}
 
 impl<T: FileContents> Debug for FileContentsWrapper<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
