@@ -5,12 +5,12 @@ authors = ["Markus Stange <mstange@themasta.com>"]
 edition = "2018"
 
 [dependencies]
-samply-api = { path = "../samply-api/" }
-js-sys = "0.3.53"
-wasm-bindgen = {version = "0.2.76", features = ["serde-serialize"] }
-wasm-bindgen-futures = "0.4.26"
+samply-api = { version = "0.20.0" }
+js-sys = "0.3.60"
+wasm-bindgen = {version = "0.2.83" }
+wasm-bindgen-futures = "0.4.33"
 serde = { version = "1.0", features = ["derive"] }
-serde_derive = "^1.0.59"
+serde-wasm-bindgen = "0.4.5"
 # console_error_panic_hook = "0.1.6"
 
 [lib]

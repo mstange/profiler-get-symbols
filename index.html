@@ -243,17 +243,35 @@
       exceptionTextTextarea.value = JSON.stringify({ name, message, ...error });
     }
 
-    function addGetCandidatePathsForBinaryOrPdbSection(parentElement, debugName, breakpadId, res) {
+    function libraryInfoSummary(info) {
+      return [...Object.entries(info)].filter(([key, val]) => val !== null && val !== undefined).map(([key, val]) => `${key}: ${val}`).join(", ");
+    }
+
+    function addGetCandidatePathsForDebugFileSection(parentElement, info, res) {
       const section = document.createElement("section");
       section.innerHTML = `
-        <h3><code>getCandidatePathsForBinaryOrPdb</code> called</h3>
+        <h3><code>getCandidatePathsForDebugFile</code> called</h3>
         <p class="params"></p>
         <p>Returning <code class="returnValue"></code></p>`;
       parentElement.appendChild(section);
       section.scrollIntoView({ behavior: "smooth" });
       const paramsP = section.querySelector(".params");
       const returnValueCode = section.querySelector(".returnValue");
-      paramsP.textContent = `debugName: ${debugName}, breakpadId: ${breakpadId}`;
+      paramsP.textContent = libraryInfoSummary(info);
+      returnValueCode.textContent = JSON.stringify(res);
+    }
+
+    function addGetCandidatePathsForBinarySection(parentElement, info, res) {
+      const section = document.createElement("section");
+      section.innerHTML = `
+        <h3><code>getCandidatePathsForBinary</code> called</h3>
+        <p class="params"></p>
+        <p>Returning <code class="returnValue"></code></p>`;
+      parentElement.appendChild(section);
+      section.scrollIntoView({ behavior: "smooth" });
+      const paramsP = section.querySelector(".params");
+      const returnValueCode = section.querySelector(".returnValue");
+      paramsP.textContent = libraryInfoSummary(info);
       returnValueCode.textContent = JSON.stringify(res);
     }
 
@@ -397,14 +415,25 @@
         this._element = parentElement;
       }
 
-      getCandidatePathsForBinaryOrPdb(debugName, breakpadId) {
-        const res = [debugName];
-        if (debugName === "AppKit") {
+      getCandidatePathsForDebugFile(info) {
+        const res = [info.debugName];
+        if (info.debugName === "AppKit") {
           res.push("dyldcache:/System/Library/dyld/dyld_shared_cache_arm64e:/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit");
           res.push("dyldcache:/System/Library/dyld/dyld_shared_cache_x86_64h:/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit");
           res.push("dyldcache:/System/Library/dyld/dyld_shared_cache_x86_64:/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit");
         }
-        addGetCandidatePathsForBinaryOrPdbSection(this._element, debugName, breakpadId, res);
+        addGetCandidatePathsForDebugFileSection(this._element, info, res);
+        return res;
+      }
+
+      getCandidatePathsForBinary(info) {
+        const res = [info.name];
+        if (info.debugName === "AppKit") {
+          res.push("dyldcache:/System/Library/dyld/dyld_shared_cache_arm64e:/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit");
+          res.push("dyldcache:/System/Library/dyld/dyld_shared_cache_x86_64h:/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit");
+          res.push("dyldcache:/System/Library/dyld/dyld_shared_cache_x86_64:/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit");
+        }
+        addGetCandidatePathsForBinarySection(this._element, info, res);
         return res;
       }
 
@@ -448,9 +477,15 @@
         this._element = parentElement;
       }
 
-      getCandidatePathsForBinaryOrPdb(debugName, breakpadId) {
-        const res = this._availableFiles.filter(path => getBasename(path) == debugName);
-        addGetCandidatePathsForBinaryOrPdbSection(this._element, debugName, breakpadId, res);
+      getCandidatePathsForDebugFile(info) {
+        const res = this._availableFiles.filter(path => getBasename(path) == info.debugName);
+        addGetCandidatePathsForDebugFileSection(this._element, info, res);
+        return res;
+      }
+
+      getCandidatePathsForBinary(info) {
+        const res = this._availableFiles.filter(path => getBasename(path) == info.name);
+        addGetCandidatePathsForBinarySection(this._element, info, res);
         return res;
       }
 
@@ -474,9 +509,15 @@
         this._fileNamesAndPaths = files.map(({ name, webkitRelativePath }) => ({ name, path: webkitRelativePath }));
       }
 
-      getCandidatePathsForBinaryOrPdb(debugName, breakpadId) {
-        const res = this._fileNamesAndPaths.filter(({name}) => name == debugName).map(({path}) => path);
-        addGetCandidatePathsForBinaryOrPdbSection(this._element, debugName, breakpadId, res);
+      getCandidatePathsForDebugFile(info) {
+        const res = this._fileNamesAndPaths.filter(({name}) => name == info.debugName).map(({path}) => path);
+        addGetCandidatePathsForDebugFileSection(this._element, info, res);
+        return res;
+      }
+
+      getCandidatePathsForBinary(info) {
+        const res = this._fileNamesAndPaths.filter(({name}) => name == info.name).map(({path}) => path);
+        addGetCandidatePathsForBinarySection(this._element, info, res);
         return res;
       }
 

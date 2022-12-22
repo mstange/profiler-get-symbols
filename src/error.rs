@@ -20,7 +20,7 @@ impl From<samply_symbols::Error> for GetSymbolsError {
 
 impl From<GetSymbolsError> for JsValue {
     fn from(err: GetSymbolsError) -> Self {
-        JsValue::from_serde(&err).unwrap()
+        serde_wasm_bindgen::to_value(&err).unwrap()
     }
 }
 

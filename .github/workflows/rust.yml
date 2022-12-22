@@ -13,16 +13,5 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Build samply-symbols
-      working-directory: samply-symbols
+    - name: Build
       run: cargo build --verbose
-    - name: Test samply-symbols
-      working-directory: samply-symbols
-      run: cargo test --verbose
-
-    - name: Build samply-api
-      working-directory: samply-api
-      run: cargo build --verbose
-    - name: Test samply-api
-      working-directory: samply-api
-      run: cargo test --verbose

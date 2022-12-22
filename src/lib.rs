@@ -1,12 +1,14 @@
 mod error;
 
 use js_sys::Promise;
+use serde::Serialize;
 use std::{future::Future, pin::Pin};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{future_to_promise, JsFuture};
 
 use samply_api::samply_symbols::{
-    self, debugid::DebugId, FileByteSource, FileContentsWithChunkedCaching, FileLocation,
+    self, debugid::DebugId, CompactSymbolTable, FileByteSource, FileContentsWithChunkedCaching,
+    FileLocation, LibraryInfo,
 };
 
 pub use error::{GenericError, GetSymbolsError, JsValueError};
@@ -21,21 +23,19 @@ extern "C" {
     ///   - a special string with the syntax "dyldcache:<dyld_cache_path>:<dylib_path>"
     ///     for libraries that are in the dyld shared cache.
     #[wasm_bindgen(catch, method)]
-    fn getCandidatePathsForBinaryOrPdb(
+    fn getCandidatePathsForDebugFile(
         this: &FileAndPathHelper,
-        debugName: &str,
-        breakpadId: &str,
+        library_info: JsValue,
     ) -> Result<JsValue, JsValue>;
 
-    /// Returns Array<String>
     #[wasm_bindgen(catch, method)]
-    fn getCandidatePathsForPdb(
+    fn getCandidatePathsForBinary(
         this: &FileAndPathHelper,
-        debugName: &str,
-        breakpadId: &str,
-        pdbPathAsStoredInBinary: &str,
-        binaryPath: &str,
+        library_info: JsValue,
     ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, method)]
+    fn getDyldSharedCachePaths(this: &FileAndPathHelper) -> Result<JsValue, JsValue>;
 
     /// Returns Promise<BufferWrapper>
     #[wasm_bindgen(method)]
@@ -62,13 +62,14 @@ extern "C" {
 /// ```js
 /// async function getSymbolTable(debugName, breakpadId, libKeyToPathMap) {
 ///   const helper = {
-///     getCandidatePathsForBinaryOrPdb: (debugName, breakpadId) => {
-///       const path = libKeyToPathMap.get(`${debugName}/${breakpadId}`);
+///     getCandidatePathsForDebugFile: (info) => {
+///       const path = libKeyToPathMap.get(`${info.debugName}/${info.breakpadId}`);
 ///       if (path !== undefined) {
 ///         return [path];
 ///       }
 ///       return [];
 ///     },
+///     getCandidatePathsForBinary: (info) => [],
 ///     readFile: async (filename) => {
 ///       const byteLength = await getFileSizeInBytes(filename);
 ///       const fileHandle = getFileHandle(filename);
@@ -105,13 +106,14 @@ pub fn get_compact_symbol_table(
 /// ```js
 /// async function queryAPIWrapper(url, requestJSONString, libKeyToPathMap) {
 ///   const helper = {
-///     getCandidatePathsForBinaryOrPdb: (debugName, breakpadId) => {
-///       const path = libKeyToPathMap.get(`${debugName}/${breakpadId}`);
+///     getCandidatePathsForDebugFile: (info) => {
+///       const path = libKeyToPathMap.get(`${info.debugName}/${info.breakpadId}`);
 ///       if (path !== undefined) {
 ///         return [path];
 ///       }
 ///       return [];
 ///     },
+///     getCandidatePathsForBinary: (info) => [],
 ///     readFile: async (filename) => {
 ///       const byteLength = await getFileSizeInBytes(filename);
 ///       const fileHandle = getFileHandle(filename);
@@ -140,7 +142,9 @@ async fn query_api_impl(
     request_json: String,
     helper: FileAndPathHelper,
 ) -> Result<JsValue, JsValue> {
-    let response_json = samply_api::query_api(&url, &request_json, &helper).await;
+    let symbol_manager = samply_symbols::SymbolManager::with_helper(&helper);
+    let api = samply_api::Api::new(&symbol_manager);
+    let response_json = api.query_api(&url, &request_json).await;
     Ok(response_json.into())
 }
 
@@ -152,14 +156,23 @@ async fn get_compact_symbol_table_impl(
     let debug_id = DebugId::from_breakpad(&breakpad_id).map_err(|_| {
         GetSymbolsError::from(samply_symbols::Error::InvalidBreakpadId(breakpad_id))
     })?;
-    let result = samply_symbols::get_compact_symbol_table(&debug_name, debug_id, &helper).await;
+    let symbol_manager = samply_symbols::SymbolManager::with_helper(&helper);
+    let info = LibraryInfo {
+        debug_name: Some(debug_name),
+        debug_id: Some(debug_id),
+        ..Default::default()
+    };
+    let result = symbol_manager.load_symbol_map(&info).await;
     match result {
-        Result::Ok(table) => Ok(js_sys::Array::of3(
-            &js_sys::Uint32Array::from(&table.addr[..]),
-            &js_sys::Uint32Array::from(&table.index[..]),
-            &js_sys::Uint8Array::from(&table.buffer[..]),
-        )
-        .into()),
+        Result::Ok(symbol_map) => {
+            let table = CompactSymbolTable::from_symbol_map(&symbol_map);
+            Ok(js_sys::Array::of3(
+                &js_sys::Uint32Array::from(&table.addr[..]),
+                &js_sys::Uint32Array::from(&table.index[..]),
+                &js_sys::Uint8Array::from(&table.buffer[..]),
+            )
+            .into())
+        }
         Result::Err(err) => Err(GetSymbolsError::from(err).into()),
     }
 }
@@ -229,16 +242,31 @@ impl<'h> samply_symbols::FileAndPathHelper<'h> for FileAndPathHelper {
     type OpenFileFuture =
         Pin<Box<dyn Future<Output = samply_symbols::FileAndPathHelperResult<Self::F>> + 'h>>;
 
-    fn get_candidate_paths_for_binary_or_pdb(
+    fn get_candidate_paths_for_debug_file(
         &self,
-        debug_name: &str,
-        debug_id: &DebugId,
+        library_info: &LibraryInfo,
     ) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo>> {
-        get_candidate_paths_for_binary_or_pdb_impl(
+        get_candidate_paths_for_debug_file_impl(
             FileAndPathHelper::from((*self).clone()),
-            debug_name.to_owned(),
-            *debug_id,
+            library_info.clone(),
         )
+    }
+
+    fn get_candidate_paths_for_binary(
+        &self,
+        library_info: &LibraryInfo,
+    ) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo>> {
+        get_candidate_paths_for_binary_impl(
+            FileAndPathHelper::from((*self).clone()),
+            library_info.clone(),
+        )
+    }
+
+    fn get_dyld_shared_cache_paths(
+        &self,
+        _arch: Option<&str>,
+    ) -> samply_symbols::FileAndPathHelperResult<Vec<std::path::PathBuf>> {
+        Ok(Vec::new())
     }
 
     fn open_file(
@@ -263,16 +291,62 @@ impl<'h> samply_symbols::FileAndPathHelper<'h> for FileAndPathHelper {
     }
 }
 
-fn get_candidate_paths_for_binary_or_pdb_impl(
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsLibraryInfo {
+    pub debug_name: Option<String>,
+    pub breakpad_id: Option<String>,
+    pub debug_path: Option<String>,
+    pub name: Option<String>,
+    pub code_id: Option<String>,
+    pub path: Option<String>,
+    pub arch: Option<String>,
+}
+
+impl From<LibraryInfo> for JsLibraryInfo {
+    fn from(info: LibraryInfo) -> Self {
+        Self {
+            debug_name: info.debug_name,
+            breakpad_id: info.debug_id.map(|di| di.breakpad().to_string()),
+            debug_path: info.debug_path,
+            name: info.name,
+            code_id: info.code_id.map(|ci| ci.to_string()),
+            path: info.path,
+            arch: info.arch,
+        }
+    }
+}
+
+fn make_library_info_js_value(library_info: LibraryInfo) -> JsValue {
+    serde_wasm_bindgen::to_value(&JsLibraryInfo::from(library_info)).unwrap()
+}
+
+fn get_candidate_paths_for_debug_file_impl(
     helper: FileAndPathHelper,
-    debug_name: String,
-    debug_id: DebugId,
+    library_info: LibraryInfo,
 ) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo>> {
-    let breakpad_id = debug_id.breakpad().to_string();
-    let res = helper.getCandidatePathsForBinaryOrPdb(&debug_name, &breakpad_id);
-    let value = res.map_err(JsValueError::from)?;
-    let array = js_sys::Array::from(&value);
-    Ok(array
+    let paths = helper
+        .getCandidatePathsForDebugFile(make_library_info_js_value(library_info))
+        .map_err(JsValueError::from)?;
+    let array = js_sys::Array::from(&paths);
+    Ok(convert_js_array_to_candidate_paths(array))
+}
+
+fn get_candidate_paths_for_binary_impl(
+    helper: FileAndPathHelper,
+    library_info: LibraryInfo,
+) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo>> {
+    let paths = helper
+        .getCandidatePathsForBinary(make_library_info_js_value(library_info))
+        .map_err(JsValueError::from)?;
+    let array = js_sys::Array::from(&paths);
+    Ok(convert_js_array_to_candidate_paths(array))
+}
+
+fn convert_js_array_to_candidate_paths(
+    array: js_sys::Array,
+) -> Vec<samply_symbols::CandidatePathInfo> {
+    array
         .iter()
         .filter_map(|val| val.as_string())
         .map(|s| {
@@ -289,5 +363,5 @@ fn get_candidate_paths_for_binary_or_pdb_impl(
             }
             samply_symbols::CandidatePathInfo::SingleFile(FileLocation::Path(s.into()))
         })
-        .collect())
+        .collect()
 }

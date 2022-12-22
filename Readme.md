@@ -1,79 +1,15 @@
 # profiler-get-symbols
 
-The crates in this repo allow you to obtain symbol tables from ELF, Mach-O and PE
-binaries as well as from pdb files. The implementation makes use of the crates
-`object` and `pdb`.
+This repo contains a wasm wrapper around the [`samply-symbols`](https://docs.rs/samply-symbols/) and [`samply-api`](https://docs.rs/samply-api/) crates.
 
-The `lib` directory contains a generic Rust implementation. The `wasm` directory
-contains a wrapper that targets WebAssembly and JavaScript.
-The `examples` directory contains two command line tools that can be used to test
-the functionality, for example as follows (executed from the workspace root):
+This is used in Firefox to supply symbol information from local files to the [Firefox profiler](https://profiler.firefox.com/):
 
-```
-cargo run -p dump-table -- firefox.pdb fixtures/win64-ci
-cargo run -p query-api -- fixtures/win64-ci /symbolicate/v5 '{"jobs": [{"stacks":[[[0,204776],[0,129423],[1, 237799]]],"memoryMap":[["firefox.pdb","AA152DEB2D9B76084C4C44205044422E1"],["mozglue.pdb","63C609072D3499F64C4C44205044422E1"],["wntdll.pdb","D74F79EB1F8D4A45ABCD2F476CCABACC1"]]}]}'
-```
+ - When you capture a profile in Firefox, this profile contains native stacks with code addresses.
+ - In order to resolve those code addresses to function names and file/line information, profiler.firefox.com makes a request back into privileged browser code.
+ - The privileged browser code downloads the `profiler-get-symbols` wasm file on demand.
+ - It executes the wasm code, supplying a "helper" callback object which allows the wasm code to read local files.
 
-The .wasm file and the JavaScript bindings are used by the Gecko profiler.
-More specifically, they are used by the
-[ProfilerGetSymbols.jsm](https://searchfox.org/mozilla-central/source/browser/components/extensions/ProfilerGetSymbols.jsm) module in Firefox. The code is run every time you use the Gecko profiler: On macOS and Linux
-it is used to get symbols for native system libraries, and on all platforms it
-is used if you're profiling a local build of Firefox for which there are no
-symbols on the [Mozilla symbol server](https://symbols.mozilla.org/).
-
-## Documentation
-
-Documentation for the Rust API can be found at [https://docs.rs/profiler-get-symbols/](https://docs.rs/profiler-get-symbols/).
-Documentation for the "Symbolication API" format can be found in [API.md](API.md).
-
-## Running / Testing
-
-### command line tools
-
-Examples of running the `dump-table` tool:
-
-```
-cargo run -p dump-table -- firefox.pdb fixtures/win64-ci
-cargo run -p dump-table -- firefox.exe fixtures/win64-ci
-cargo run -p dump-table -- libmozglue.dylib fixtures/macos-local
-cargo run -p dump-table -- libmozglue.dylib fixtures/macos-local INCORRECTID
-cargo run -p dump-table -- libmozglue.dylib fixtures/macos-local F38030E4A3783F90B2282FCB0B33261A0
-cargo run -p dump-table -- AppKit /System/Library/Frameworks/AppKit.framework/Versions/C/
-cargo run -p dump-table -- libsystem_kernel.dylib /usr/lib/system
-cargo run -p dump-table -- libsystem_kernel.dylib /usr/lib/system B6602BF001213894AED620A8CF2A30B80 --full
-```
-
-Examples of running the `query-api` tool:
-
-```
-cargo run -p query-api -- fixtures/win64-ci /symbolicate/v5 '{"jobs": [{"stacks":[[[0,204776],[0,129423],[1, 237799]]],"memoryMap":[["firefox.pdb","AA152DEB2D9B76084C4C44205044422E1"],["mozglue.pdb","63C609072D3499F64C4C44205044422E1"],["wntdll.pdb","D74F79EB1F8D4A45ABCD2F476CCABACC1"]]}]}'
-cargo run -p query-api -- fixtures/android32-local /symbolicate/v5 '{"jobs": [{"stacks":[[[0,247618],[0,685896],[0,686768]]],"memoryMap":[["libmozglue.so","0CE47B7C29F27CED55C41233B93EBA450"]]}]}'
-cargo run -p query-api -- fixtures/android32-local /symbolicate/v5 '{"jobs": [{"stacks":[[[0,247618],[0,685896],[0,686768]]],"memoryMap":[["libmozglue.so","0CE47B7C29F27CED55C41233B93EBA450"]]}]}'
-cargo run -p query-api -- fixtures/android32-local /symbolicate/v5 '{"jobs": [{"stacks":[[[0,247618],[0,685896],[0,686768]]],"memoryMap":[["libmozglue.so","0CE47B7C29F27CED55C41233B93EBA45"]]}]}'
-cargo run -p query-api -- fixtures/android32-local /symbolicate/v5 '{"jobs": [{"stacks":[[[0,247618],[0,685896],[0,686768]]],"memoryMap":[["lebmozglue.so","0CE47B7C29F27CED55C41233B93EBA45"]]}]}'
-cargo run -p query-api -- fixtures/win64-ci /symbolicate/v5 '{"jobs": [{"stacks":[[[0,244290],[0,244219]]],"memoryMap":[["mozglue.pdb","63C609072D3499F64C4C44205044422E1"]]}]}'
-cargo run -p query-api -- fixtures/macos-local /symbolicate/v5 '{"jobs": [{"stacks":[[[0,247618],[0,685896],[0,686768]]],"memoryMap":[["libmozglue.dylib","F38030E4A3783F90B2282FCB0B33261A0"]]}]}'
-cargo run --release -p query-api -- ~/code/obj-m-opt/dist/bin /symbolicate/v5 @fixtures/requests/macos-local-xul.json
-```
-
-Running tests:
-
-```
-cargo test --workspace
-```
-
-Benchmarks:
-
-```
-# Download big-benchmark-fixtures directory once (multiple GB), and run all benchmarks:
-cargo run --release -p benchmarks
-
-# Run a specific benchmark (requires big-benchmark-fixtures directory):
-cargo run --release -p query-api -- big-benchmark-fixtures/win64-ci/ /symbolicate/v5 @fixtures/requests/win64-ci-xul.json > /dev/null
-cargo run --release -p query-api -- big-benchmark-fixtures/macos-ci/ /symbolicate/v5 @fixtures/requests/macos-ci-xul.json > /dev/null
-cargo run --release -p query-api -- big-benchmark-fixtures/macos-local/ /symbolicate/v5 @fixtures/requests/macos-local-xul.json > /dev/null
-# ... (see examples/benchmarks/src/main.rs for more)
-```
+The ability to download this code on-demand is the main point of compiling it to WebAssembly. The alternative would have been to compile it into Firefox, but this would have increased the Firefox binary size for everyone.
 
 ### WebAssembly
 
@@ -109,7 +45,7 @@ One-time setup:
 
 ```bash
 rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli # --force to update
+cargo install wasm-bindgen-cli
 ```
 
 After a change:
