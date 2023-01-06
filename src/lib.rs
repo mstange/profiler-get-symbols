@@ -239,13 +239,15 @@ impl Drop for FileContentsWrapper {
 
 impl<'h> samply_symbols::FileAndPathHelper<'h> for FileAndPathHelper {
     type F = FileContentsWithChunkedCaching<FileContentsWrapper>;
+    type FL = StringPath;
     type OpenFileFuture =
         Pin<Box<dyn Future<Output = samply_symbols::FileAndPathHelperResult<Self::F>> + 'h>>;
 
     fn get_candidate_paths_for_debug_file(
         &self,
         library_info: &LibraryInfo,
-    ) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo>> {
+    ) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo<StringPath>>>
+    {
         get_candidate_paths_for_debug_file_impl(
             FileAndPathHelper::from((*self).clone()),
             library_info.clone(),
@@ -255,7 +257,8 @@ impl<'h> samply_symbols::FileAndPathHelper<'h> for FileAndPathHelper {
     fn get_candidate_paths_for_binary(
         &self,
         library_info: &LibraryInfo,
-    ) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo>> {
+    ) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo<StringPath>>>
+    {
         get_candidate_paths_for_binary_impl(
             FileAndPathHelper::from((*self).clone()),
             library_info.clone(),
@@ -265,18 +268,54 @@ impl<'h> samply_symbols::FileAndPathHelper<'h> for FileAndPathHelper {
     fn get_dyld_shared_cache_paths(
         &self,
         _arch: Option<&str>,
-    ) -> samply_symbols::FileAndPathHelperResult<Vec<std::path::PathBuf>> {
+    ) -> samply_symbols::FileAndPathHelperResult<Vec<StringPath>> {
         Ok(Vec::new())
     }
 
-    fn open_file(
+    fn get_candidate_paths_for_gnu_debug_link_dest(
         &self,
-        location: &FileLocation,
+        debug_link_name: &str,
+    ) -> samply_symbols::FileAndPathHelperResult<Vec<StringPath>> {
+        // https://www-zeuthen.desy.de/unix/unixguide/infohtml/gdb/Separate-Debug-Files.html
+        Ok(vec![
+            StringPath(format!("/usr/bin/{}.debug", &debug_link_name)),
+            StringPath(format!("/usr/bin/.debug/{}.debug", &debug_link_name)),
+            StringPath(format!("/usr/lib/debug/usr/bin/{}.debug", &debug_link_name)),
+        ])
+    }
+
+    fn get_candidate_paths_for_supplementary_debug_file(
+        &self,
+        original_file_path: &StringPath,
+        sup_file_path: &str,
+        sup_file_build_id: &samply_symbols::ElfBuildId,
+    ) -> samply_symbols::FileAndPathHelperResult<Vec<StringPath>> {
+        let mut paths = Vec::new();
+
+        if sup_file_path.starts_with('/') {
+            paths.push(StringPath(sup_file_path.to_owned()));
+        } else if let Some(last_slash_pos) = original_file_path.0.rfind(['/', '\\']) {
+            let parent_dir = &original_file_path.0[..last_slash_pos];
+            paths.push(StringPath(format!("{parent_dir}/{sup_file_path}")));
+        }
+
+        let build_id = sup_file_build_id.to_string();
+        if build_id.len() > 2 {
+            let (two_chars, rest) = build_id.split_at(2);
+            let path = format!("/usr/lib/debug/.build-id/{}/{}.debug", two_chars, rest);
+            paths.push(StringPath(path));
+        }
+
+        Ok(paths)
+    }
+
+    fn load_file(
+        &self,
+        location: StringPath,
     ) -> Pin<Box<dyn Future<Output = samply_symbols::FileAndPathHelperResult<Self::F>> + 'h>> {
         let helper = FileAndPathHelper::from((*self).clone());
-        let location = location.clone();
         let future = async move {
-            let location = location.to_string_lossy();
+            let location = location.0;
             let file_res = JsFuture::from(helper.readFile(&location)).await;
             let file = file_res.map_err(JsValueError::from)?;
             let contents = FileContents::from(file);
@@ -288,6 +327,33 @@ impl<'h> samply_symbols::FileAndPathHelper<'h> for FileAndPathHelper {
             ))
         };
         Box::pin(future)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StringPath(String);
+
+impl std::fmt::Display for StringPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FileLocation for StringPath {
+    fn location_for_dyld_subcache(&self, suffix: &str) -> Option<Self> {
+        Some(Self(format!("{}{suffix}", self.0)))
+    }
+
+    fn location_for_external_object_file(&self, object_file: &str) -> Option<Self> {
+        Some(Self(object_file.to_owned()))
+    }
+
+    fn location_for_pdb_from_binary(&self, pdb_path_in_binary: &str) -> Option<Self> {
+        Some(Self(pdb_path_in_binary.to_owned()))
+    }
+
+    fn location_for_source_file(&self, source_file_path: &str) -> Option<Self> {
+        Some(Self(source_file_path.to_owned()))
     }
 }
 
@@ -324,7 +390,7 @@ fn make_library_info_js_value(library_info: LibraryInfo) -> JsValue {
 fn get_candidate_paths_for_debug_file_impl(
     helper: FileAndPathHelper,
     library_info: LibraryInfo,
-) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo>> {
+) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo<StringPath>>> {
     let paths = helper
         .getCandidatePathsForDebugFile(make_library_info_js_value(library_info))
         .map_err(JsValueError::from)?;
@@ -335,7 +401,7 @@ fn get_candidate_paths_for_debug_file_impl(
 fn get_candidate_paths_for_binary_impl(
     helper: FileAndPathHelper,
     library_info: LibraryInfo,
-) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo>> {
+) -> samply_symbols::FileAndPathHelperResult<Vec<samply_symbols::CandidatePathInfo<StringPath>>> {
     let paths = helper
         .getCandidatePathsForBinary(make_library_info_js_value(library_info))
         .map_err(JsValueError::from)?;
@@ -345,7 +411,7 @@ fn get_candidate_paths_for_binary_impl(
 
 fn convert_js_array_to_candidate_paths(
     array: js_sys::Array,
-) -> Vec<samply_symbols::CandidatePathInfo> {
+) -> Vec<samply_symbols::CandidatePathInfo<StringPath>> {
     array
         .iter()
         .filter_map(|val| val.as_string())
@@ -356,12 +422,12 @@ fn convert_js_array_to_candidate_paths(
                     let dyld_cache_path = &remainder[0..offset];
                     let dylib_path = &remainder[offset + 1..];
                     return samply_symbols::CandidatePathInfo::InDyldCache {
-                        dyld_cache_path: dyld_cache_path.into(),
+                        dyld_cache_path: StringPath(dyld_cache_path.into()),
                         dylib_path: dylib_path.into(),
                     };
                 }
             }
-            samply_symbols::CandidatePathInfo::SingleFile(FileLocation::Path(s.into()))
+            samply_symbols::CandidatePathInfo::SingleFile(StringPath(s))
         })
         .collect()
 }
