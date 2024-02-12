@@ -5,7 +5,7 @@ authors = ["Markus Stange <mstange@themasta.com>"]
 edition = "2018"
 
 [dependencies]
-samply-api = { version = "0.21.0" }
+samply-api = { version = "0.22.0" }
 js-sys = "0.3.60"
 wasm-bindgen = {version = "0.2" }
 wasm-bindgen-futures = "0.4"
