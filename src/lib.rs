@@ -145,7 +145,7 @@ async fn query_api_impl(
     request_json: String,
     helper: FileAndPathHelper,
 ) -> Result<JsValue, JsValue> {
-    let symbol_manager = samply_symbols::SymbolManager::with_helper(&helper);
+    let symbol_manager = samply_symbols::SymbolManager::with_helper(helper);
     let api = samply_api::Api::new(&symbol_manager);
     let response_json = api.query_api(&url, &request_json).await;
     Ok(response_json.into())
@@ -159,7 +159,7 @@ async fn get_compact_symbol_table_impl(
     let debug_id = DebugId::from_breakpad(&breakpad_id).map_err(|_| {
         GetSymbolsError::from(samply_symbols::Error::InvalidBreakpadId(breakpad_id))
     })?;
-    let symbol_manager = samply_symbols::SymbolManager::with_helper(&helper);
+    let symbol_manager = samply_symbols::SymbolManager::with_helper(helper);
     let info = LibraryInfo {
         debug_name: Some(debug_name),
         debug_id: Some(debug_id),
@@ -314,15 +314,9 @@ impl FileByteSource for JsFileHandle {
     }
 }
 
-impl<'h> samply_symbols::FileAndPathHelper<'h> for FileAndPathHelper {
+impl samply_symbols::FileAndPathHelper for FileAndPathHelper {
     type F = FileContentsWithChunkedCaching<JsFileHandle>;
     type FL = StringPath;
-    type OpenFileFuture = Pin<
-        Box<
-            dyn OptionallySendFuture<Output = samply_symbols::FileAndPathHelperResult<Self::F>>
-                + 'h,
-        >,
-    >;
 
     fn get_candidate_paths_for_debug_file(
         &self,
@@ -394,12 +388,8 @@ impl<'h> samply_symbols::FileAndPathHelper<'h> for FileAndPathHelper {
     fn load_file(
         &self,
         location: StringPath,
-    ) -> Pin<
-        Box<
-            dyn OptionallySendFuture<Output = samply_symbols::FileAndPathHelperResult<Self::F>>
-                + 'h,
-        >,
-    > {
+    ) -> Pin<Box<dyn OptionallySendFuture<Output = samply_symbols::FileAndPathHelperResult<Self::F>>>>
+    {
         let helper = FileAndPathHelper::from((*self).clone());
         let future = async move {
             let location = location.0;
@@ -441,6 +431,14 @@ impl FileLocation for StringPath {
     }
 
     fn location_for_breakpad_symindex(&self) -> Option<Self> {
+        None
+    }
+
+    fn location_for_dwo(&self, _comp_dir: &str, _path: &str) -> Option<Self> {
+        None
+    }
+
+    fn location_for_dwp(&self) -> Option<Self> {
         None
     }
 }
